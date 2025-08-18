@@ -1,0 +1,266 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<pnml>
+  <net id="TJN_Without_Types" type="http://www.pnml.org/version-2009/grammar/pnmlcoremodel">
+    <name>
+      <text>TJN_Without_Types</text>
+    </name>
+    <page id="n0">
+      <place id="e1_pre_tau_start_pstart">
+        <name>
+          <text>e1_pre_tau_start_pstart</text>
+        </name>
+        <initialMarking>
+          <text>1</text>
+        </initialMarking>
+      </place>
+      <place id="e1_pre">
+        <name>
+          <text>e1_pre</text>
+        </name>
+      </place>
+      <place id="e12_pre_xor_start">
+        <name>
+          <text>e12_pre_xor_start</text>
+        </name>
+      </place>
+      <place id="e4_pre">
+        <name>
+          <text>e4_pre</text>
+        </name>
+      </place>
+      <place id="e10_xor_start">
+        <name>
+          <text>e10_xor_start</text>
+        </name>
+      </place>
+      <place id="e11_pre">
+        <name>
+          <text>e11_pre</text>
+        </name>
+      </place>
+      <place id="e2_pre">
+        <name>
+          <text>e2_pre</text>
+        </name>
+      </place>
+      <place id="e3_post">
+        <name>
+          <text>e3_post</text>
+        </name>
+      </place>
+      <place id="a?_1_pre">
+        <name>
+          <text>a?_1_pre</text>
+        </name>
+      </place>
+      <place id="e1_post">
+        <name>
+          <text>e1_post</text>
+        </name>
+      </place>
+      <place id="e12_pre_xor_end">
+        <name>
+          <text>e12_pre_xor_end</text>
+        </name>
+      </place>
+      <place id="e12_pre">
+        <name>
+          <text>e12_pre</text>
+        </name>
+      </place>
+      <place id="e4_post">
+        <name>
+          <text>e4_post</text>
+        </name>
+      </place>
+      <place id="e13_pre">
+        <name>
+          <text>e13_pre</text>
+        </name>
+      </place>
+      <place id="e11_post">
+        <name>
+          <text>e11_post</text>
+        </name>
+      </place>
+      <place id="e2_post">
+        <name>
+          <text>e2_post</text>
+        </name>
+      </place>
+      <place id="e8_pre">
+        <name>
+          <text>e8_pre</text>
+        </name>
+      </place>
+      <place id="a?_2_pre">
+        <name>
+          <text>a?_2_pre</text>
+        </name>
+      </place>
+      <place id="e12_post">
+        <name>
+          <text>e12_post</text>
+        </name>
+      </place>
+      <place id="e3_pre">
+        <name>
+          <text>e3_pre</text>
+        </name>
+      </place>
+      <place id="e14_pre">
+        <name>
+          <text>e14_pre</text>
+        </name>
+      </place>
+      <transition id="e2">
+        <name>
+          <text>e2</text>
+        </name>
+      </transition>
+      <transition id="a?_2">
+        <name>
+          <text>a?_2</text>
+        </name>
+      </transition>
+      <transition id="e12">
+        <name>
+          <text>e12</text>
+        </name>
+      </transition>
+      <transition id="a?_1">
+        <name>
+          <text>a?_1</text>
+        </name>
+      </transition>
+      <transition id="e1">
+        <name>
+          <text>e1</text>
+        </name>
+      </transition>
+      <transition id="e4">
+        <name>
+          <text>e4</text>
+        </name>
+      </transition>
+      <transition id="e9">
+        <name>
+          <text>e9</text>
+        </name>
+      </transition>
+      <transition id="e15">
+        <name>
+          <text>e15</text>
+        </name>
+      </transition>
+      <transition id="e1_pre_tau_start">
+        <name>
+          <text>e1_pre_tau_start</text>
+        </name>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="2ba4fb6a-4444-4f48-bcb9-88279e247ee7"/>
+      </transition>
+      <transition id="e3_tau_start">
+        <name>
+          <text>e3_tau_start</text>
+        </name>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="4738ef9f-1619-40e2-8c43-4fc19de71d6a"/>
+      </transition>
+      <transition id="e7">
+        <name>
+          <text>e7</text>
+        </name>
+      </transition>
+      <transition id="e10">
+        <name>
+          <text>e10</text>
+        </name>
+      </transition>
+      <transition id="e11">
+        <name>
+          <text>e11</text>
+        </name>
+      </transition>
+      <transition id="e3">
+        <name>
+          <text>e3</text>
+        </name>
+      </transition>
+      <transition id="e14">
+        <name>
+          <text>e14</text>
+        </name>
+      </transition>
+      <transition id="e8">
+        <name>
+          <text>e8</text>
+        </name>
+      </transition>
+      <transition id="e6">
+        <name>
+          <text>e6</text>
+        </name>
+      </transition>
+      <transition id="e5">
+        <name>
+          <text>e5</text>
+        </name>
+      </transition>
+      <transition id="e13">
+        <name>
+          <text>e13</text>
+        </name>
+      </transition>
+      <arc id="134565762965504" source="e11" target="e11_post"/>
+      <arc id="134565762964736" source="e1_pre_tau_start_pstart" target="e1_pre_tau_start"/>
+      <arc id="134565763061888" source="e14_pre" target="e14"/>
+      <arc id="134565763065488" source="e2_post" target="e3_tau_start"/>
+      <arc id="134565762965264" source="e3_tau_start" target="e4_pre"/>
+      <arc id="134565763058192" source="e12_pre_xor_start" target="e6"/>
+      <arc id="134565763062800" source="e8_pre" target="e8"/>
+      <arc id="134565763063184" source="e4_pre" target="e4"/>
+      <arc id="134565763063568" source="e12_pre" target="e12"/>
+      <arc id="134565763063952" source="e2_pre" target="e2"/>
+      <arc id="134565763065008" source="e4_post" target="e5"/>
+      <arc id="134565763065392" source="e1_post" target="e3_tau_start"/>
+      <arc id="134565763064528" source="a?_1" target="e8_pre"/>
+      <arc id="134565763058096" source="e15" target="e12_pre_xor_end"/>
+      <arc id="134565763061936" source="e1_pre_tau_start" target="e2_pre"/>
+      <arc id="134565763062704" source="e10_xor_start" target="e10"/>
+      <arc id="134565763063856" source="e3" target="e3_post"/>
+      <arc id="134565763064240" source="e6" target="a?_1_pre"/>
+      <arc id="134565763064624" source="e11_pre" target="e11"/>
+      <arc id="134565763064912" source="e8" target="e12_pre"/>
+      <arc id="134565763065296" source="e11_post" target="e15"/>
+      <arc id="134565762965696" source="e1_pre" target="e1"/>
+      <arc id="134565762964160" source="e13" target="e12_pre_xor_end"/>
+      <arc id="134565763058240" source="a?_2" target="e10_xor_start"/>
+      <arc id="134565763065104" source="e3_post" target="e5"/>
+      <arc id="134565762966992" source="e12_pre_xor_start" target="e7"/>
+      <arc id="134565762964688" source="e3_tau_start" target="e3_pre"/>
+      <arc id="134565763056848" source="e1_pre_tau_start" target="e1_pre"/>
+      <arc id="134565763062224" source="e10_xor_start" target="e9"/>
+      <arc id="134565763062992" source="e9" target="e13_pre"/>
+      <arc id="134565763063376" source="e4" target="e4_post"/>
+      <arc id="134565763063760" source="e12" target="e12_post"/>
+      <arc id="134565763064144" source="e13_pre" target="e13"/>
+      <arc id="134565763065200" source="e12_post" target="e15"/>
+      <arc id="134565762966368" source="e1" target="e1_post"/>
+      <arc id="134565762958304" source="e14" target="e12_pre_xor_end"/>
+      <arc id="134565763058144" source="e7" target="a?_2_pre"/>
+      <arc id="134565763064336" source="a?_2_pre" target="a?_2"/>
+      <arc id="134565763057904" source="a?_1_pre" target="a?_1"/>
+      <arc id="134565763062512" source="e5" target="e12_pre_xor_start"/>
+      <arc id="134565763063280" source="e10" target="e14_pre"/>
+      <arc id="134565763063664" source="e3_pre" target="e3"/>
+      <arc id="134565763064048" source="e2" target="e2_post"/>
+      <arc id="134565763064816" source="e8" target="e11_pre"/>
+    </page>
+    <finalmarkings>
+      <marking>
+        <place idref="e12_pre_xor_end">
+          <text>1</text>
+        </place>
+      </marking>
+    </finalmarkings>
+  </net>
+</pnml>
