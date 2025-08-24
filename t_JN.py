@@ -1,17 +1,25 @@
 from __future__ import annotations
 import pm4py
+import subprocess
+import os
+import copy
+from enum import Enum
+from pm4py.objects.petri_net.utils.petri_utils import add_arc_from_to
+from pm4py.objects.petri_net.obj import PetriNet, Marking
 from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.log.obj import Trace, EventLog
 from pm4py.algo.discovery.inductive import algorithm as inductive_miner
 from pm4py.visualization.petri_net import visualizer as pn_visualizer
 from pm4py.visualization.process_tree import visualizer as pt_visualizer
-from pm4py.objects.petri_net.obj import PetriNet
 from typing import Dict, Set, Optional, Tuple
 from collections import defaultdict
 from pm4py.objects.process_tree.obj import ProcessTree
-from enum import Enum
 from pm4py.util import xes_constants as xes
+from pm4py.objects.log.exporter.xes import exporter as xes_exporter
+from pm4py.algo.analysis.workflow_net import algorithm as wfn_algorithm
+from pm4py.objects.petri_net.exporter import exporter as pnml_exporter
 
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # Process Tree for the 1.Log: {'Agent 1': ->(
@@ -221,11 +229,16 @@ class TypedJacksonNet:
         and updates:
           - Transition.pre / Transition.post
           - Place.in_arcs / Place.out_arcs
+          - Transition.emit / Transition.collect
         """
         # Clear all sets before rebuilding (to avoid duplication on re-call)
         for t in self.transitions.values():
             t.pre = set()
             t.post = set()
+            t.emit = set()     
+            t.collect = set()
+            t.in_arcs = set()
+            t.out_arcs = set()
         for p in self.places.values():
             p.in_arcs = set()
             p.out_arcs = set()
@@ -237,7 +250,7 @@ class TypedJacksonNet:
                 t = arc.target
                 p = arc.source
                 t.pre.add(p)
-                t.out_arcs.add(arc)
+                t.in_arcs.add(arc)
                 p.out_arcs.add(arc)
 
             elif isinstance(arc.source, Transition) and isinstance(arc.target, Place):
@@ -245,9 +258,44 @@ class TypedJacksonNet:
                 t = arc.source
                 p = arc.target
                 t.post.add(p)
-                t.in_arcs.add(p)
+                t.out_arcs.add(arc)
                 p.in_arcs.add(arc)
+        
+        # Deduce emit and collect from incoming/outgoing arc variables
+        for t in self.transitions.values():
+            incoming_vars = set()
+            outgoing_vars = set()
+            for arc in self.arcs:
+                if arc.target == t:
+                    incoming_vars.update(arc.variable)
+                if arc.source == t:
+                    outgoing_vars.update(arc.variable)
+            t.emit = outgoing_vars - incoming_vars
+            t.collect = incoming_vars - outgoing_vars
+        
+        # Ensure unique transition names
+        name_count = {}
+        to_rename = []
+        for t_name, t in self.transitions.items():
+            if t_name not in name_count:
+                name_count[t_name] = 1
+            else:
+                name_count[t_name] += 1
+                to_rename.append(t)
 
+        # Ensure unique transition names
+        for t in to_rename:
+            base_name = t.name
+            idx = 1
+            while f"{base_name}_{idx}" in self.transitions:
+                idx += 1
+            new_name = f"{base_name}_{idx}"
+            # Update all references to the transition's name
+            old_name = t.name
+            t.name = new_name
+            # Update the key in self.transitions
+            self.transitions[new_name] = self.transitions.pop(old_name)
+            
 
     def remove_arc_from_to(self, fro, to):
         """
@@ -274,17 +322,23 @@ class TypedJacksonNet:
 
 
     def add_arc_from_to(self, fro, to, var):
+        if to.name == "t12_tau_start_tau_end":
+            print(f"Pre places of {to.name}:")
+            for a in to.pre:
+                print(f"- {a.name}")
+
         if isinstance(fro, Transition) and isinstance(to, Place):
             arc = Arc(var, fro, to)
             self.arcs.add(arc)
             fro.post.add(to)
             fro.out_arcs.add(arc)
+            to.in_arcs.add(arc)
         elif isinstance(fro, Place) and isinstance(to, Transition):
             arc = Arc(var, fro, to)
             self.arcs.add(arc)
             to.pre.add(fro)
             to.in_arcs.add(arc)
-
+            fro.out_arcs.add(arc)
 
 
     def append_sequence(self, *children):
@@ -312,12 +366,8 @@ class TypedJacksonNet:
         if len(children) > 1:
             for i in range(len(children) - 1):
                 current_net = children[i]
-                print("Current net:")
-                current_net.print_net()
                 next_net = children[i + 1]
-                print("Next_net: ")
-                next_net.print_net()
-
+              
                 # Get the last place of current net and first place of next net
                 last_place_current = current_net.last_place
                 first_place_current = current_net.first_place
@@ -460,8 +510,8 @@ class TypedJacksonNet:
         self.places[f'{name}_xor_end'] = shared_end
 
         for child in children:
-            print("Current Children:")
-            child.print_net()
+            # print("Current Children:")
+            # child.print_net()
             if len(child.transitions) == 1 and 'tau' in next(iter(child.transitions)):
                 continue
             self.children.add(child)
@@ -515,10 +565,10 @@ class TypedJacksonNet:
                 raise ValueError(f"t-JN is not complete, failing start/end place. First Place: {first_place}, Last Place: {last_place}")
 
 
-        print("All arcs after XOR append: ")
-        for arc in self.arcs:
-            print(f"Arc: {arc.source.name} -> {arc.target.name}")
-            print(f"Variable: {arc.variable}")
+        # print("All arcs after XOR append: ")
+        # for arc in self.arcs:
+        #     print(f"Arc: {arc.source.name} -> {arc.target.name}")
+        #     print(f"Variable: {arc.variable}")
 
 
 
@@ -599,10 +649,10 @@ class TypedJacksonNet:
         self.remove_place(start_place_end_tau.name)
         self.remove_place(end_place_start_tau.name)
 
-        print("All arcs after parallel append: ")
-        for arc in self.arcs:
-            print(f"Arc: {arc.source.name} -> {arc.target.name}")
-            print(f"Variable: {arc.variable}")
+        # print("All arcs after parallel append: ")
+        # for arc in self.arcs:
+        #     print(f"Arc: {arc.source.name} -> {arc.target.name}")
+        #     print(f"Variable: {arc.variable}")
 
 
     def append_loop(self, *children):
@@ -722,10 +772,10 @@ class TypedJacksonNet:
                 else:
                     raise ValueError(f"t-JN is not complete, failing start/end place.")
 
-        print("All arcs after loop append: ")
-        for arc in self.arcs:
-            print(f"Arc: {arc.source.name} -> {arc.target.name}")
-            print(f"Variable: {arc.variable}")
+        # print("All arcs after loop append: ")
+        # for arc in self.arcs:
+        #     print(f"Arc: {arc.source.name} -> {arc.target.name}")
+        #     print(f"Variable: {arc.variable}")
 
 
 def create_tau(name: str) -> TypedJacksonNet:
@@ -774,9 +824,9 @@ def build_tjn_from_pm4py_tree(tree: ProcessTree, activity_specs, operator=None):
         return tjn
     elif tree.operator.name == 'SEQUENCE':
         nets = [build_tjn_from_pm4py_tree(child, activity_specs) for child in tree.children]
-        print(f"{len(nets)} sequence nets:")
-        for net in nets:
-            net.print_net()
+        # print(f"{len(nets)} sequence nets:")
+        # for net in nets:
+        #     net.print_net()
 
         main = TypedJacksonNet()
         main.append_sequence(*nets)
@@ -785,10 +835,10 @@ def build_tjn_from_pm4py_tree(tree: ProcessTree, activity_specs, operator=None):
         if nets:  # only if there are nets in the sequence
             main.first_place = nets[0].first_place
             main.last_place = nets[-1].last_place
-            print(f"Sequence append: set first place to {main.first_place.name}, last place to {main.last_place.name}")
+            # print(f"Sequence append: set first place to {main.first_place.name}, last place to {main.last_place.name}")
 
-        print(f"Sequence append final result: ")
-        main.print_net()
+        # print(f"Sequence append final result: ")
+        # main.print_net()
         return main
 
     elif tree.operator.name == 'PARALLEL':
@@ -973,141 +1023,7 @@ def filter_net_by_resource(
             subnet.children.add(filtered_child)
 
     return subnet
-# def filtration(net: TypedJacksonNet, resource: str, resource_mapping: dict) -> TypedJacksonNet:
-#     """
-#     Filters the TypedJacksonNet by the given agent/resource attribute.
-#     Returns a subnet containing only elements relevant to the specified resource.
-#
-#     Args:
-#         net: The original TypedJacksonNet to filter
-#         resource: The resource attribute to filter by
-#         resource_mapping: Dictionary mapping transitions to their associated resources
-#
-#     Returns:
-#         A new TypedJacksonNet containing only elements relevant to the resource
-#     """
-#     # Check if resource exists in any transition's mapping
-#     if resource not in {res for resources in resource_mapping.values() for res in resources}:
-#         raise ValueError(f"The resource '{resource}' doesn't exist in any transition")
-#
-#     # Create new empty subnet
-#     subnet = TypedJacksonNet()
-#
-#     # Step 1: Find all transitions associated with this resource
-#     relevant_transitions = set()
-#     for t, resources in resource_mapping.items():
-#         if resource in resources:
-#             relevant_transitions.add(net.transitions[t])
-#
-#     # If no transitions found, return empty subnet
-#     if not relevant_transitions:
-#         print("No relevant transitions found")
-#         return subnet
-#
-#     # Step 2: Find all places connected to these transitions (pre and post)
-#     relevant_places = set()
-#     relevant_arcs = set()
-#     flow_relations = set()
-#
-#     # Collect all arcs and connected places
-#     for arc in net.arcs:
-#         if arc.source in relevant_transitions or arc.target in relevant_transitions:
-#             relevant_arcs.add(arc)
-#             if isinstance(arc.source, Place):
-#                 relevant_places.add(arc.source)
-#             if isinstance(arc.target, Place):
-#                 relevant_places.add(arc.target)
-#
-#
-#     # Step 3: Add all collected elements to subnet
-#     for place in relevant_places:
-#         subnet.places[place.name] = place
-#
-#     for transition in relevant_transitions:
-#         subnet.transitions[transition.name] = transition
-#
-#     for arc in relevant_arcs:
-#         subnet.arcs.add(arc)
-#
-#     # Step 4: Determine first and last places
-#     potential_first_places = [
-#         p for p in relevant_places
-#         if not any(a for a in subnet.arcs
-#                    if a.target == p and a.source in relevant_transitions)
-#     ]
-#     potential_last_places = [
-#         p for p in relevant_places
-#         if not any(a for a in subnet.arcs
-#                    if a.source == p and a.target in relevant_transitions)
-#     ]
-#
-#     if len(potential_first_places) == 1:
-#         subnet.first_place = potential_first_places[0]
-#     elif not potential_first_places:
-#         # No first places found - create new one and connect to initial transitions
-#         first_transitions = [
-#             t for t in relevant_transitions
-#             if not any(a for a in subnet.arcs
-#                        if a.target == t and a.source in relevant_places)
-#         ]
-#         if first_transitions:
-#             new_first_place = Place(f"start_{resource}")
-#             subnet.places[new_first_place.name] = new_first_place
-#             subnet.first_place = new_first_place
-#
-#             for t in first_transitions:
-#                 new_arc = Arc({resource}, new_first_place, t)
-#                 subnet.arcs.add(new_arc)
-#     else:
-#         # Multiple first places - create synchronization transition
-#         new_first_place = Place(f"start_{resource}", types = {resource})
-#         subnet.places[new_first_place.name] = new_first_place
-#         subnet.first_place = new_first_place
-#
-#         # Create sync transition with proper arcs
-#         subnet.add_transition(
-#             name=f"sync_start_{resource}",
-#             inscription={'input': {resource}, 'output': {resource}},
-#             pre={new_first_place},
-#             post=set(potential_first_places)
-#         )
-#
-#     if len(potential_last_places) == 1:
-#         subnet.last_place = potential_last_places[0]
-#     elif not potential_last_places:
-#         # No last places found - create new one and connect from final transitions
-#         last_transitions = [
-#             t for t in relevant_transitions
-#             if not any(a for a in subnet.arcs
-#                        if a.source == t and a.target in relevant_places)
-#         ]
-#         if last_transitions:
-#             new_last_place = Place(f"end_{resource}")
-#             subnet.places[new_last_place.name] = new_last_place
-#             subnet.last_place = new_last_place
-#
-#             for t in last_transitions:
-#                 new_arc = Arc({resource}, t, new_last_place)
-#                 subnet.arcs.add(new_arc)
-#     else:
-#         print("Multiple potential last places.")
-#         new_last_place = Place(f"end_{resource}")
-#         subnet.places[new_last_place.name] = new_last_place
-#         subnet.last_place = new_last_place
-#
-#         # Create sync transition with proper arcs
-#         subnet.add_transition(
-#             name=f"sync_end_{resource}",
-#             inscription={'input': {resource}, 'output': {resource}},
-#             pre=set(potential_last_places),
-#             post={new_last_place}
-#         )
-#     print(f"First place of subnet: {subnet.first_place.name}, last place: {subnet.last_place.name}")
-#     return subnet
 
-
-from pm4py.objects.petri_net.utils.petri_utils import add_arc_from_to
-from pm4py.objects.petri_net.obj import PetriNet, Marking
 
 # Convert tjn to petri net for conformance checking
 def convert_tjn_to_petri_ignore_types(tjn_model) -> Tuple[PetriNet, Marking, Marking]:
@@ -1209,7 +1125,7 @@ def remove_arc_from_to(net, a, b):
             break  # stop after removing one
 
 
-def remove_tau_splits_and_joins_tjn(tjn: TypedJacksonNet):
+def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
     """
     Removes silent transitions that have either:
     - 1 input place and multiple output places (split), or
@@ -1221,29 +1137,45 @@ def remove_tau_splits_and_joins_tjn(tjn: TypedJacksonNet):
     :param net:
     :return:
     """
-    tjn.populate_transition_places()
+    tjn = copy.deepcopy(typed_JN)
     initial_place = tjn.get_first_place()
     final_place = tjn.get_last_place()
     to_remove = []
 
     for t_name, t in tjn.transitions.items():
-        if t_name is None or "tau" in t_name.lower() or "_tau_" in t_name.lower():
-            # Case 1: Split (1 input, multiple outputs)
+        if t_name == "e12_pre_tau_start":
+            for pre in t.pre:
+                predecessors = [a.source for a in pre.in_arcs]
+                print(f"Debug: Predecessors of {t_name} is")
+                for pre in predecessors:
+                    print(f"- {pre.name}")
+                
 
+
+    for t_name, t in tjn.transitions.items():
+        if t_name is None or "tau" in t_name.lower() or "_tau_" in t_name.lower():
+
+            # Case 1: Split (1 input, multiple outputs)
             if len(t.pre) == 1 and len(t.post) > 1:
                 input_place = next(iter(t.pre))
 
                 if input_place is not initial_place:
-                    predecessors = [a.source for a in input_place.in_arcs if isinstance(a.source, Transition)]
+                    predecessors = [a.source for a in input_place.in_arcs]
 
                     if len(predecessors) == 1:
-                        print(f"Silent transition {t_name}")
+                        print(f"Predecessor of silent transition {t_name} is: {predecessors[0].name}")
                         # Whether input place has direct transition successors
                         # If not, remove all the incoming and outgoing arcs, and delete the input place afterward
+                        
                         succ_transitions = [a.target for a in input_place.out_arcs
-                                            if isinstance(a.target, PetriNet.Transition) and a.target != t]
+                                            if a.target.name != t_name]
+                        remove_post = True
 
                         if len(succ_transitions) > 0:  # True if there is at least one other successor transition
+                            remove_post = False
+                            print(f"Successor transitions of silent transition {t_name}:")
+                            for suc in succ_transitions:
+                                print(f" - {suc.name}   ")
                             tjn.remove_arc_from_to(input_place, t)
                         else:
                             # Succ_transition only contains silent transition
@@ -1255,16 +1187,18 @@ def remove_tau_splits_and_joins_tjn(tjn: TypedJacksonNet):
 
                         # Remove transition t and its arcs
                         vars = set()
-                        for p in t.post:
+                        for p in list(t.post):
                             var = tjn.remove_arc_from_to(t, p)
                             vars.update(var)
 
                         # Connect predecessor transition to all output places
-                        for p in t.post:
-                            predecessor = tjn.transitions[predecessors[0].name]
-                            tjn.add_arc_from_to(predecessor, p, vars)
-                            predecessor.pre.discard(input_place)
+                        for p in list(t.post):
+                            tjn.add_arc_from_to(predecessors[0], p, vars)
+                            if remove_post:
+                                predecessors[0].post.discard(p)
                         to_remove.append(t_name)
+                        t.pre = set()
+                        t.post = set()
 
 
             # Case 2: Join (multiple inputs, 1 output)
@@ -1273,13 +1207,26 @@ def remove_tau_splits_and_joins_tjn(tjn: TypedJacksonNet):
 
                 if output_place is not final_place:
                     successors = [a.target for a in output_place.out_arcs if isinstance(a.target, Transition)]
+                    if t_name == "t12_tau_end":
+                        print(f"Debug: Successors of {t_name} is (should be t12_tau_start_tau_end)")
+                        for suc in successors:
+                            print(f"- {suc.name}")
+                            print(f"Predecessors of {suc.name} is (should contain t10)")
+                            for pre_place in suc.pre:
+                                for a in pre_place.in_arcs:
+                                    print(f" - {a.source.name}")
 
                     if len(successors) == 1:
-                        print(f"Silent transition {t_name}")
                         pred_transitions = [a.source for a in output_place.in_arcs
-                                            if isinstance(a.source, Transition) and a.source != t]
+                                            if isinstance(a.source, Transition) and a.source.name != t_name]
+                        discard_output = True
 
                         if len(pred_transitions) > 0:  # True if there is at least one other predecessor transition
+                            discard_output = False
+                            print(f"Output place of silent transition {t_name} has successor: {successors[0].name}")
+                            print(f"Output place of silent transition {t_name} has predecessors:")
+                            for pred in pred_transitions:
+                                print(f" - {pred.name}")
                             tjn.remove_arc_from_to(t, output_place)
                         else:
                             for arc in list(output_place.in_arcs) + list(output_place. out_arcs):
@@ -1290,15 +1237,25 @@ def remove_tau_splits_and_joins_tjn(tjn: TypedJacksonNet):
 
                         # Remove transition t and its arcs
                         vars = set()
-                        for p in t.pre:
+                        for p in list(t.pre):
                             var = tjn.remove_arc_from_to(p, t)
                             vars.update(var)
-                        for p in t.pre:
-                            successor = tjn.transitions[successors[0].name]
-                            tjn.add_arc_from_to(p, successor, vars)
-                            successor.pre.discard(output_place)
+                        for p in list(t.pre):
+                            tjn.add_arc_from_to(p, successors[0], vars)
+                            print(f"Pre place of {successors[0].name} before adding arcs:")
+                            for pre in successors[0].pre:
+                                print(f" - {pre.name}")
+
+                            print(f"Connecting {p.name} to {successors[0].name}")
+                            print(f"Pre place of {successors[0].name}:")
+                            for pre in successors[0].pre:
+                                print(f" - {pre.name}")
+                            if discard_output:
+                                successors[0].pre.discard(output_place)
 
                         to_remove.append(t_name)
+                        t.pre = set()
+                        t.post = set()
 
     for t_name in to_remove:
         tjn.transitions.pop(t_name)
@@ -1387,135 +1344,148 @@ def remove_tau_splits_and_joins_pn(net: PetriNet, initial_marking: Marking, fina
 
 
 # Find all resources and convert to tjn by each of the resources
-    def convert_to_tjn_by_resource(log_name):
-        log_path = f"{log_name}.xes"
-        log = xes_importer.apply(log_path)
-        tjns = {}
-        pns = {}
-        all_resources = get_all_resources(log)
-        logs_by_resource = {}
-        if len(all_resources) > 1:
-            for res in all_resources:
-                logs_by_resource[res] = filter_log_by_resource(log, res)
-                # Save the sublog
-                sublog_path = f"sublog_{log_name}_{res}.xes"
+def convert_to_tjn_by_resource(log_path):
+    log_name = log_path.removesuffix(".xes")
+    log = xes_importer.apply(os.path.join(PROJECT_DIR, "logs", log_path))
+    tjn_full = None
+    tjns = {}
+    pns = {}
+    all_resources = get_all_resources(log)
+    logs_by_resource = {}
+
+    tree_full = inductive_miner.apply(log)
+    resource_mapping = create_resource_mapping(log)
+    tjn_full = build_tjn(tree_full, activity_specs=resource_mapping)
+    tjn_full.populate_transition_places()
+    tjn_full = remove_tau_splits_and_joins_tjn(tjn_full)
+    tjn_full.populate_transition_places()
+
+    pn, initial_marking, final_marking = convert_tjn_to_petri_ignore_types(tjn_full)
+    # Visualize the full Petri net
+    filename = os.path.join(PROJECT_DIR, "logs", "pngs", f"full_{log_name}.png")
+    if not os.path.exists(filename):
+        gviz = pn_visualizer.apply(pn, initial_marking, final_marking)
+        pn_visualizer.save(gviz, filename)
+
+    if len(all_resources) > 1:
+        for res in all_resources:
+            logs_by_resource[res] = filter_log_by_resource(log, res)
+            # Save the sublog
+            sublog_path = os.path.join(PROJECT_DIR, "logs", "sublog", f"sub_log_{log_name}_{res}.xes")
+            # sublog_path = f"sublog_{log_name}_{res}.xes"
+            if not os.path.exists(sublog_path):
                 xes_exporter.apply(logs_by_resource[res], sublog_path)
+    else:
+        logs_by_resource["No resource"] = log
+
+    # Convert each sublog to tjn
+    for resource, sub_log in logs_by_resource.items():
+        resource_mapping = create_resource_mapping(sub_log)
+        tree = inductive_miner.apply(sub_log)
+        tjn = build_tjn(tree, activity_specs=resource_mapping)
+        tjn.populate_transition_places()
+        tjns[resource] = remove_tau_splits_and_joins_tjn(tjn)
+    
+    
+
+    # Convert tjn to petri nets and remove unnecessary silent transitions
+    for resource, tjn in tjns.items():
+        converted_filterd_pn, initial_marking, final_marking = convert_tjn_to_petri_ignore_types(tjn)
+        pns[resource] = (converted_filterd_pn, initial_marking, final_marking)
+        print(f"Initial marking: {initial_marking}, Final marking: {final_marking}")
+        # remove_tau_splits_and_joins_pn(converted_filterd_pn, initial_marking, final_marking)
+        # Visualize the Petri net
+        filename = os.path.join(PROJECT_DIR, "logs", "pngs", f"{resource}_{log_name}.png")
+        # filename =  f"{resource}_{log_name}.png"
+
+        if not os.path.exists(filename):
+            gviz = pn_visualizer.apply(converted_filterd_pn, initial_marking, final_marking)
+            pn_visualizer.save(gviz, filename)
+
+    return tjn_full, all_resources, logs_by_resource, tjns, pns
+
+
+def check_property(petri_nets):
+    for pn, initial_marking, final_marking in petri_nets.values():
+        # 1. First check if it's a workflow net
+        is_wfn = wfn_algorithm.apply(pn)
+
+        if is_wfn:
+            print("The net is a workflow net")
+            # Workflow-specific analysis
+            from pm4py.algo.analysis.woflan import algorithm as woflan
+
+            is_sound = woflan.apply(pn, initial_marking, final_marking)
+            print(f"Soundness: {is_sound}")
         else:
-            logs_by_resource["No resource"] = log
+            print("The net is a general Petri net (not a workflow net)")
+            # Perform general Petri net analysis instead
+            from pm4py.algo.analysis.extended_marking_equation import algorithm as extended_marking
 
-        # Convert each sublog to tjn
-        for resource, sub_log in logs_by_resource.items():
-            resource_mapping = create_resource_mapping(sub_log)
-            tree = inductive_miner.apply(sub_log)
-            tjn = build_tjn(tree, activity_specs=resource_mapping)
-            tjn.populate_transition_places()
-            remove_tau_splits_and_joins_tjn(tjn)
-            tjns[resource] = remove_tau_splits_and_joins_tjn(tjn)
-
-        # Convert tjn to petri nets and remove unnecessary silent transitions
-        for resource, tjn in tjns.items():
-            converted_filterd_pn, initial_marking, final_marking = convert_tjn_to_petri_ignore_types(tjn)
-            pns[resource] = (converted_filterd_pn, initial_marking, final_marking)
-            print(f"Initial marking: {initial_marking}, Final marking: {final_marking}")
-            # remove_tau_splits_and_joins_pn(converted_filterd_pn, initial_marking, final_marking)
-            # Visualize the Petri net
-            filename =  f"{resource}_{log_name}.png"
-
-            if not os.path.exists(filename):
-                gviz = pn_visualizer.apply(converted_filterd_pn, initial_marking, final_marking)
-                pn_visualizer.save(gviz, filename)
-
-        return logs_by_resource, tjns, pns
-
-
-    def check_property(petri_nets):
-        for pn, initial_marking, final_marking in petri_nets.values():
-            # 1. First check if it's a workflow net
-            is_wfn = wfn_algorithm.apply(pn)
-
-            if is_wfn:
-                print("The net is a workflow net")
-                # Workflow-specific analysis
-                from pm4py.algo.analysis.woflan import algorithm as woflan
-
-                is_sound = woflan.apply(pn, initial_marking, final_marking)
-                print(f"Soundness: {is_sound}")
+            diagnostics = extended_marking.apply(pn, initial_marking, final_marking)
+            if diagnostics["is_sound"]:
+                print("The net is sound (despite not being a workflow net)")
             else:
-                print("The net is a general Petri net (not a workflow net)")
-                # Perform general Petri net analysis instead
-                from pm4py.algo.analysis.extended_marking_equation import algorithm as extended_marking
-
-                diagnostics = extended_marking.apply(pn, initial_marking, final_marking)
-                if diagnostics["is_sound"]:
-                    print("The net is sound (despite not being a workflow net)")
-                else:
-                    print("Potential issues detected:")
-                    print(f"Dead transitions: {diagnostics['dead_transitions']}")
-                    print(f"Unreachable final markings: {diagnostics['unreachable_markings']}")
+                print("Potential issues detected:")
+                print(f"Dead transitions: {diagnostics['dead_transitions']}")
+                print(f"Unreachable final markings: {diagnostics['unreachable_markings']}")
 
 
-    def precision_and_fitness(petri_nets, logs, log_name):
-        # Export Petri net to PNML file
-        for resource, (pn, initial_marking, final_marking) in petri_nets.items():
-            print(f"{log_name} filtered by {resource}: ")
-            path_pnml = f"{resource}_{log_name}.pnml"
-            if not os.path.exists(path_pnml):
-                pnml_exporter.apply(pn, initial_marking, path_pnml, final_marking=final_marking)
+def precision_and_fitness(petri_nets, logs, log_name):
+    # Export Petri net to PNML file
+    for resource, (pn, initial_marking, final_marking) in petri_nets.items():
+        print(f"{log_name} filtered by {resource}: ")
+        path_pnml = os.path.join(PROJECT_DIR, "logs", "pnmls", f"{resource}_{log_name}.pnml")
+        # path_pnml = f"{resource}_{log_name}.pnml"
+        if not os.path.exists(path_pnml):
+            pnml_exporter.apply(pn, initial_marking, path_pnml, final_marking=final_marking)
 
-            # Convert back to petri net, pm4py ensures the Petri net is in a “sound” format suitable for alignments.
-            pn = pm4py.read_pnml(path_pnml)
+        # Convert back to petri net, pm4py ensures the Petri net is in a “sound” format suitable for alignments.
+        pn = pm4py.read_pnml(path_pnml)
 
-            # Alignment based fitness and precision
-            fitness = pm4py.fitness_alignments(logs[resource], *pn)
-            precision = pm4py.precision_alignments(logs[resource], *pn)
-
-            print(f"Alignment-based Fitness: {fitness}")
-            print(f"Alignment-based Precision: {precision}")
-
-
-            jar_path = "codebase/jbpt-pm/entropia/jbpt-pm-entropia-1.7.jar"
-            sublog_path = f"sublog_{log_name}_{resource}.xes"
-            if os.path.exists(sublog_path):
-                rel_path = sublog_path
-            else:
-                rel_path = f"{log_name}.xes"
-
-            # Entropy based fitness and precision
-            command = [
-                "java", "-jar", jar_path,
-                "-rel", rel_path,
-                "-ret", path_pnml,
-                "-empr"  # Compute precision
-            ]
-
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if result.returncode != 0:
-                print("Error running Entropia:\n", result.stderr)
-            else:
-                output = result.stdout
-                precision = recall = None
-
-                # Extract values
-                for line in output.splitlines():
-                    if line.strip().startswith("Precision:"):
-                        precision = float(line.split(":")[1].strip().rstrip('.'))
-                    elif line.strip().startswith("Recall:"):
-                        recall = float(line.split(":")[1].strip().rstrip('.'))
-
-                print(f"Entropy-based fitness: {precision}")
-                print(f"Entropy-based recall: {recall}")
+        # Alignment based fitness and precision
+        fitness = pm4py.fitness_alignments(logs[resource], *pn)
+        precision = pm4py.precision_alignments(logs[resource], *pn)
+        print(f"Alignment-based Fitness: {fitness}")
+        print(f"Alignment-based Precision: {precision}")
 
 
+        jar_path = "codebase/jbpt-pm/entropia/jbpt-pm-entropia-1.7.jar"
+        sublog_path = os.path.join(PROJECT_DIR, f"sublog_{log_name}_{resource}.xes")
+        # sublog_path = f"sublog_{log_name}_{resource}.xes"
+        if os.path.exists(sublog_path):
+            rel_path = sublog_path
+        else:
+            rel_path = os.path.join(PROJECT_DIR, f"{log_name}.xes")
+            # rel_path = f"{log_name}.xes"
+
+        # Entropy based fitness and precision
+        command = [
+            "java", "-jar", jar_path,
+            "-rel", rel_path,
+            "-ret", path_pnml,
+            "-empr"  # Compute precision
+        ]
+
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            print("Error running Entropia:\n", result.stderr)
+        else:
+            output = result.stdout
+            precision = recall = None
+
+            # Extract values
+            for line in output.splitlines():
+                if line.strip().startswith("Precision:"):
+                    precision = float(line.split(":")[1].strip().rstrip('.'))
+                elif line.strip().startswith("Recall:"):
+                    recall = float(line.split(":")[1].strip().rstrip('.'))
+
+            print(f"Entropy-based fitness: {precision}")
+            print(f"Entropy-based recall: {recall}")
 
 
 if __name__ == '__main__':
-    from pm4py.objects.log.exporter.xes import exporter as xes_exporter
-    from pm4py.algo.analysis.workflow_net import algorithm as wfn_algorithm
-    from pm4py.objects.petri_net.exporter import exporter as pnml_exporter
-    import subprocess
-
-    from pm4py.filtering import filter_event_attribute_values
-    import os
 
 
     def create_sample_net():

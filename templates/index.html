@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>TJN Visualizer - Petri Net</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://unpkg.com/dagre-d3@0.6.4/dist/dagre-d3.min.js"></script>
+  <style>
+    body { 
+      font-family: sans-serif;
+      margin: 0; 
+      padding: 0; 
+      overflow: hidden;
+    }
+    h2 { 
+      margin: 10px; 
+    }
+
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 5px;
+    }
+
+    #container {
+      display: flex;
+      height: calc(100vh - 60px);
+    }
+
+    #sidebar {
+      width: 200px;
+      border-right: 1px solid #ccc;
+      padding: 10px;
+      box-sizing: border-box;
+      background: #fafafa;
+      overflow-y: auto;
+    }
+
+    #graph-container {
+      flex: 1;
+      border: 1px solid #ccc;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #graph {
+      width: 100%;
+      height: 100%;
+    }
+
+    .node circle {
+      fill: white; 
+      stroke: #333; 
+      stroke-width: 2px;
+    }
+    .node.filled circle {
+      fill: #333;
+    }
+    .node rect {
+      fill: #afc7f6; 
+      stroke: #333; 
+      stroke-width: 2px;
+    }
+    .edgePath path {
+      stroke: #555; 
+      stroke-width: 2px; 
+      fill: none;
+    }
+    
+    text { 
+      font-size: 12px; 
+      font-weight: bold;
+      pointer-events: none;
+    }
+
+    .edgeLabel text {
+      font-size: 10px;
+      background: white;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+    
+    .controls-info {
+      font-size: 12px;
+      color: #666;
+      margin-top: 10px;
+    }
+    
+    .node {
+      cursor: pointer;
+    }
+    .node:hover circle,
+    .node:hover rect {
+      stroke-width: 3px;
+      stroke: #ff6b00;
+    }
+  </style>
+</head>
+<body>
+  <h2>TypedJacksonNet Visualizer - Petri Net Structure</h2>
+  <div id="controls">
+    <label for="logSelect">Choose a log:</label>
+    <select id="logSelect">
+      <option value="logs/IP-1_initial_log.xes">log1.xes</option>
+      <option value="logs/IP2_initial_log.xes">log2.xes</option>
+      <option value="logs/IP-3_init_log.xes">log3.xes</option>
+    </select>
+    <button onclick="loadGraph()" style="padding: 5px 15px;">Load Graph</button>
+    <span class="controls-info">Drag to pan, Scroll to zoom</span>
+  </div>
+  
+  <div id="container">
+    <div id="sidebar">
+      <h4>Filter by Resource</h4>
+      <select id="resourceSelect" style="width:100%; margin-bottom: 15px;"></select>
+      <div id="graph-info" style="font-size: 12px; color: #666;">
+        <p>Places: <span id="place-count">0</span></p>
+        <p>Transitions: <span id="transition-count">0</span></p>
+        <p>Arcs: <span id="arc-count">0</span></p>
+        <p>Resources: <span id="resource-count">0</span></p>
+      </div>
+      <div id="node-info" style="margin-top: 15px; padding: 10px; background: #f0f0f0; border-radius: 5px; display: none;">
+        <h5>Selected Node:</h5>
+        <div id="node-details"></div>
+      </div>
+    </div>
+    <div id="graph-container">
+      <div id="graph"></div>
+    </div>
+  </div>
+
+<script>
+let originalGraphData = null;
+
+// Track selection changes
+document.getElementById('logSelect').addEventListener('change', function() {
+  const selectedText = this.options[this.selectedIndex].text;
+  console.log("Selected:", selectedText);
+});
+
+let currentlyLoadedLog = null;
+let currentlyLoadedResource = null;
+
+function loadGraph(resource = "All") {
+  const select = document.getElementById('logSelect');
+  const selectedOption = select.options[select.selectedIndex];
+  
+  const fullPath = select.value;
+  const filename = fullPath.split("/").pop();
+
+  console.log("Loading Petri Net:", filename, "resource:", resource);
+
+  if (currentlyLoadedLog == filename && currentlyLoadedResource == resource) {
+    console.log("Same log already loaded, skipping...");
+    return;
+  }
+  currentlyLoadedLog = filename;
+  currentlyLoadedResource = resource;
+
+  fetch("/load_log", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, resource })
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return response.json(); 
+  })
+  .then(data => {
+    console.log("Loaded TJN JSON:", data);  
+    originalGraphData = data;
+    updateGraphInfo(data);
+    populateResourceDropdown(data);
+    renderGraph(data);
+  })
+  .catch(err => console.error("Error loading graph:", err));
+}
+
+function updateGraphInfo(graphData) {
+  const places = graphData.nodes.filter(node => node.type === "place").length;
+  const transitions = graphData.nodes.filter(node => node.type === "transition").length;
+  
+  document.getElementById('place-count').textContent = places;
+  document.getElementById('transition-count').textContent = transitions;
+  document.getElementById('arc-count').textContent = graphData.edges.length;
+  document.getElementById('resource-count').textContent = graphData.resources.length;
+}
+
+function populateResourceDropdown(graphData) {
+  const resourceSelect = document.getElementById('resourceSelect');
+  resourceSelect.style.display = "inline";
+  resourceSelect.innerHTML = "";
+
+  const allOption = document.createElement('option');
+  allOption.value = "All";
+  allOption.textContent = "All Resources";
+  resourceSelect.appendChild(allOption);
+   
+  graphData.resources.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r;
+    opt.text = r;
+    resourceSelect.appendChild(opt);
+  });
+
+  resourceSelect.onchange = () => {
+    loadGraph(resourceSelect.value);
+  };
+}
+
+function showNodeInfo(data, isEdge = false) {
+  const nodeInfoBox = document.getElementById("node-info");
+  const detailsBox = document.getElementById("node-details");
+
+  if (!data) {
+    nodeInfoBox.style.display = "none";
+    return;
+  }
+
+  nodeInfoBox.style.display = "block";
+
+  if (isEdge) {
+    detailsBox.innerHTML = `
+      <p><b>Arc</b></p>
+      <p><b>From:</b> ${data.source}</p>
+      <p><b>To:</b> ${data.target}</p>
+      <p><b>Variables:</b> ${Array.isArray(data.variables) ? data.variables.join(", ") : (data.variables || "–")}</p>
+      <p><b>Label:</b> ${data.label || "–"}</p>
+    `;
+  } else if (data.type === "place") {
+    detailsBox.innerHTML = `
+      <p><b>Place:</b> ${data.label || data.id}</p>
+      <p><b>Types:</b> ${Array.isArray(data.place_types) ? data.place_types.join(", ") : (data.place_types || "–")}</p>
+      <p><b>Tokens:</b> ${data.tokens || 0}</p>
+    `;
+  } else if (data.type === "transition") {
+    detailsBox.innerHTML = `
+      <p><b>Transition:</b> ${data.label || data.id}</p>
+      <p><b>Inscription:</b> ${data.inscription ? JSON.stringify(data.inscription) : "–"}</p>
+      <p><b>Emit:</b> ${data.emit || "–"}</p>
+      <p><b>Collect:</b> ${data.collect || "–"}</p>
+    `;
+  }
+}
+
+function renderGraph(graphData) {
+  d3.select("#graph").selectAll("*").remove();
+
+  const svg = d3.select("#graph").append("svg")
+    .attr("width", "100%")
+    .attr("height", "100%");
+  const inner = svg.append("g");
+
+  // Create Dagre-D3 graph
+  const g = new dagreD3.graphlib.Graph().setGraph({
+    rankdir: "LR",
+    nodesep: 50,
+    edgesep: 20,
+    ranksep: 80
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  // Create maps to store original data
+  const nodeDataMap = new Map();
+  const edgeDataMap = new Map();
+
+  // Add nodes with proper styling and store original data
+  graphData.nodes.forEach(node => {
+    const nodeData = {
+      label: node.label || node.id,
+      style: "stroke: #333;",
+      raw: node // Store original data for click events
+    };
+
+    if (node.type === "place") {
+      nodeData.shape = "ellipse";
+      nodeData.style += "fill: " + (node.tokens > 0 ? "#333" : "white") + ";";
+      if (node.tokens > 0) {
+        nodeData.label = (node.tokens > 1 ? node.tokens + "\n" : "") + (node.label || node.id);
+      }
+    } else if (node.type === "transition") {
+      nodeData.shape = "rect";
+      nodeData.style += "fill: #afc7f6;";
+    }
+
+    g.setNode(node.id, nodeData);
+    nodeDataMap.set(node.id, node);
+  });
+
+  // Add edges and store original data - FIXED: Added proper loop
+  graphData.edges.forEach(edge => {
+    if (nodeDataMap.has(edge.source) && nodeDataMap.has(edge.target)) {
+      g.setEdge(edge.source, edge.target, {
+        label: edge.label || "",
+        arrowhead: "vee",
+        style: "stroke: #555; fill: none;",
+        raw: edge
+      });
+      edgeDataMap.set(`${edge.source}-${edge.target}`, edge);
+    }
+  });
+
+  // Create renderer
+  const render = new dagreD3.render();
+
+  // Set up arrow markers
+  svg.append("defs").append("marker")
+    .attr("id", "arrowhead")
+    .attr("viewBox", "0 -5 10 10")
+    .attr("refX", 8)
+    .attr("refY", 0)
+    .attr("markerWidth", 6)
+    .attr("markerHeight", 6)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M0,-5L10,0L0,5")
+    .attr("fill", "#555");
+
+  // Render the graph
+  render(inner, g);
+
+  // Add click events to nodes
+  inner.selectAll("g.node")
+    .on("click", function(event, nodeId) {
+      event.stopPropagation();
+      const nodeData = nodeDataMap.get(nodeId);
+      showNodeInfo(nodeData, false);
+    });
+
+  // Add click events to edges
+  inner.selectAll("g.edgePath")
+    .each(function(d) {
+      // d has shape {v: "sourceId", w: "targetId"}
+      const edgeData = edgeDataMap.get(`${d.v}-${d.w}`);
+      if (edgeData) {
+        d3.select(this).datum(edgeData); // attach the original edge data
+      }
+    })
+    .on("click", function(event, d) {
+      event.stopPropagation();
+      showNodeInfo(d, true); 
+    });
+    
+
+  // Hide panel when clicking empty space
+  svg.on("click", function(event) {
+    if (event.target === this) {
+      document.getElementById("node-info").style.display = "none";
+    }
+  });
+
+  // Set up zoom behavior
+  const zoom = d3.zoom()
+    .scaleExtent([0.1, 4])
+    .on("zoom", (event) => {
+      inner.attr("transform", event.transform);
+    });
+
+  svg.call(zoom);
+
+  // Center and fit the graph
+  const bbox = inner.node().getBBox();
+  const width = parseInt(svg.style("width"));
+  const height = parseInt(svg.style("height"));
+
+  const scale = 0.9 / Math.max(bbox.width / width, bbox.height / height);
+  const translate = [
+    (width - bbox.width * scale) / 2 - bbox.x * scale,
+    (height - bbox.height * scale) / 2 - bbox.y * scale
+  ];
+
+  svg.call(
+    zoom.transform,
+    d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+  );
+}
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
+  console.log("Page loaded. Select a log and click 'Load Graph' to render.");
+});
+</script>
+</body>
+</html>
