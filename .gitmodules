@@ -1,0 +1,3 @@
+[submodule "lib/jbpt"]
+	path = lib/jbpt
+	url = https://github.com/jbpt/codebase.git

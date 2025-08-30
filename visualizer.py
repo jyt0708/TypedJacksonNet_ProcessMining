@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from typing import Set
-from t_JN import TypedJacksonNet, Place, Transition, Arc
+from t_JN import TypedJacksonNet
 
 
 def tjn_to_json(tjn: TypedJacksonNet) -> Dict[str, Any]:
@@ -16,7 +16,7 @@ def tjn_to_json(tjn: TypedJacksonNet) -> Dict[str, Any]:
         types = []
         if hasattr(place, 'get_types') and place.get_types():
             types = [str(t) for t in place.get_types()]  # ensure string
-    
+
         nodes.append({
             "id": place.name,
             "type": "place",
@@ -32,27 +32,19 @@ def tjn_to_json(tjn: TypedJacksonNet) -> Dict[str, Any]:
             "label": transition.name
         }
         
-        # Safely add emit and collect attributes - they are Place objects
-        if hasattr(transition, 'emit'):
-            if isinstance(transition.emit, set):
+        # Add emit and collect attributes
+        if hasattr(transition, 'emit') and transition.emit is not None:
+            if isinstance(transition.emit, (set,list)):
                 # If it's a set of Place objects, convert to list of names
-                node_data["emit"] = [place.name for place in transition.emit if hasattr(place, 'name')]
-            elif hasattr(transition.emit, 'name'):
-                # If it's a single Place object, get its name
-                node_data["emit"] = transition.emit.name
+                node_data["emit"] = sorted([str(e) for e in transition.emit])
             else:
-                # Fallback: convert to string
                 node_data["emit"] = str(transition.emit)
-        
-        if hasattr(transition, 'collect'):
-            if isinstance(transition.collect, set):
+
+        if hasattr(transition, 'collect') and transition.collect is not None:
+            if isinstance(transition.collect, (set, list)):
                 # If it's a set of Place objects, convert to list of names
-                node_data["collect"] = [place.name for place in transition.collect if hasattr(place, 'name')]
-            elif hasattr(transition.collect, 'name'):
-                # If it's a single Place object, get its name
-                node_data["collect"] = transition.collect.name
+                node_data["collect"] = sorted([str(c) for c in transition.collect])
             else:
-                # Fallback: convert to string
                 node_data["collect"] = str(transition.collect)
         
         nodes.append(node_data)

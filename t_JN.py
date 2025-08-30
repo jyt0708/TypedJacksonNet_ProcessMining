@@ -4,6 +4,7 @@ import subprocess
 import os
 import copy
 from enum import Enum
+from collections import defaultdict, deque, OrderedDict
 from pm4py.objects.petri_net.utils.petri_utils import add_arc_from_to
 from pm4py.objects.petri_net.obj import PetriNet, Marking
 from pm4py.objects.log.importer.xes import importer as xes_importer
@@ -150,7 +151,6 @@ class TypedJacksonNet:
         self.arcs = set()
         self.transitions = {}
         self.children = set() if children is None else children
-        # self.loop_children = set()  # ← track loop-type children
 
 
     def add_place(self, place: Place, types=None):
@@ -223,14 +223,66 @@ class TypedJacksonNet:
             print(f"{source_name} -> {target_name}")
 
 
+    
+    def sort_transitions_left_to_right(self):
+        """
+        Sort transitions in a left-to-right order according to arcs,
+        and update self.transitions in-place.
+        """
+        # Build dependency graph between transitions
+        dep_graph = defaultdict(set)     # t1 -> successors
+        indegree = defaultdict(int)      # indegree count per transition
+
+        # Initialize indegrees
+        for t in self.transitions.values():
+            indegree[t] = 0
+
+        # For every place, connect its input transitions to its output transitions
+        for p in self.places.values():
+            incoming_trans = [arc.source for arc in p.in_arcs if isinstance(arc.source, Transition)]
+            outgoing_trans = [arc.target for arc in p.out_arcs if isinstance(arc.target, Transition)]
+
+            for t_in in incoming_trans:
+                for t_out in outgoing_trans:
+                    if t_out not in dep_graph[t_in]:
+                        dep_graph[t_in].add(t_out)
+                        indegree[t_out] += 1
+
+        # --- Topological Sort (Kahn's Algorithm) ---
+        queue = deque([t for t in indegree if indegree[t] == 0])
+        sorted_transitions = []
+
+        while queue:
+            t = queue.popleft()
+            sorted_transitions.append(t)
+            for succ in dep_graph[t]:
+                indegree[succ] -= 1
+                if indegree[succ] == 0:
+                    queue.append(succ)
+
+        # Handle cycles (append remaining unsorted transitions)
+        if len(sorted_transitions) < len(self.transitions):
+            print("[Warning] Cycles detected in transition graph, ordering may be partial.")
+            for t in self.transitions.values():
+                if t not in sorted_transitions:
+                    sorted_transitions.append(t)
+
+        # --- Rebuild self.transitions in sorted order ---
+        sorted_dict = OrderedDict()
+        for t in sorted_transitions:
+            sorted_dict[t.name] = t
+        self.transitions = sorted_dict
+
+
     def populate_transition_places(self):
         """
-        Detects all pre- and post-places of each transition in the net
+        Sort the transitions in a left-to-right order and detects all pre- and post-places of each transition in the net
         and updates:
           - Transition.pre / Transition.post
           - Place.in_arcs / Place.out_arcs
           - Transition.emit / Transition.collect
         """
+        self.sort_transitions_left_to_right()
         # Clear all sets before rebuilding (to avoid duplication on re-call)
         for t in self.transitions.values():
             t.pre = set()
@@ -278,23 +330,72 @@ class TypedJacksonNet:
         to_rename = []
         for t_name, t in self.transitions.items():
             if t_name not in name_count:
-                name_count[t_name] = 1
+                name_count[t_name] = [t]
             else:
-                name_count[t_name] += 1
-                to_rename.append(t)
+                name_count[t_name].append(t)
 
-        # Ensure unique transition names
-        for t in to_rename:
-            base_name = t.name
-            idx = 1
-            while f"{base_name}_{idx}" in self.transitions:
-                idx += 1
-            new_name = f"{base_name}_{idx}"
-            # Update all references to the transition's name
-            old_name = t.name
-            t.name = new_name
-            # Update the key in self.transitions
-            self.transitions[new_name] = self.transitions.pop(old_name)
+        # Handle duplicates
+        for base_name, trans_list in name_count.items():
+            if len(trans_list) > 1:
+                print(f"\n[Duplicate transition name detected: '{base_name}']")
+                for i, t in enumerate(trans_list, 1):
+                    print(f"  - Transition {i}: id={id(t)}, name={t.name}, pre={[p.name for p in t.pre]}, post={[p.name for p in t.post]}")
+
+                # Rename only the duplicates (keep the first one unchanged)
+                for idx, t in enumerate(trans_list[1:], 1):
+                    new_name = f"{base_name}_{idx}"
+                    print(f"  -> Renaming transition '{t.name}' (id={id(t)}) to '{new_name}'")
+                    t.name = new_name
+
+
+    def annotate_arcs_with_messages(self, messages: dict):
+        """
+        Update TypedJacksonNet arcs by propagating message variables.
+        If transition A sends message m1 and transition F receives message m1,
+        then arcs leaving A will carry variable 'm1' until F is reached.
+        """
+        for msg, participants in messages.items():
+            senders = participants.get("sent_by", [])
+            receivers = set(participants.get("received_by", []))
+
+            for sender in senders:
+                if sender not in self.transitions.keys():
+                    continue
+                start_transition = self.transitions[sender]
+
+                # DFS/BFS to propagate the message variable
+                stack = []
+                visited = set()
+
+                # push arcs leaving this transition
+                for arc in self.arcs:
+                    if arc.source == start_transition:
+                        stack.append(arc)
+
+                while stack:
+                    arc = stack.pop()
+                    if arc in visited:
+                        continue
+                    visited.add(arc)
+
+                    # mark arc with message
+                    if not hasattr(arc, "variable") or arc.variable is None:
+                        arc.variable = set()
+                    elif not isinstance(arc.variable, set):
+                        arc.variable = {arc.variable}
+                    arc.variable.add(msg)
+
+                    target = arc.target
+
+                    # if target is a transition that receives this msg -> stop propagation
+                    if hasattr(target, "name") and target.name in receivers:
+                        continue
+
+                    # otherwise propagate further along outgoing arcs
+                    for next_arc in self.arcs:
+                        if next_arc.source == target and next_arc not in visited:
+                            stack.append(next_arc)
+            print(f"Sender '{sender}' sends message '{msg}' to receiving transition '{target.name}'")
             
 
     def remove_arc_from_to(self, fro, to):
@@ -563,14 +664,7 @@ class TypedJacksonNet:
             else:
 
                 raise ValueError(f"t-JN is not complete, failing start/end place. First Place: {first_place}, Last Place: {last_place}")
-
-
-        # print("All arcs after XOR append: ")
-        # for arc in self.arcs:
-        #     print(f"Arc: {arc.source.name} -> {arc.target.name}")
-        #     print(f"Variable: {arc.variable}")
-
-
+            
 
     def append_parallel(self, name, *children):
         if not children:
@@ -908,10 +1002,10 @@ def create_resource_mapping(log):
         - "a!" or "a?"     → resource "m_a"
     Sample output:
         {
-            't1': {'Agent 1'},
-            'e1': {'Agent 2'},
-            'a!_1': {'Agent 1', 'm_a1'},
-            'a?': {'Agent 2', 'm_a'}
+            't1': ('Agent 1',),
+            'e1': ('Agent 2',),
+            'a!_1': ('Agent 1', 'm_a1'),
+            'a?': ('Agent 2', 'm_a')
         }
     """
     resource_mapping = defaultdict(set)
@@ -919,7 +1013,7 @@ def create_resource_mapping(log):
     for trace in log:
         for event in trace:
             activity = event.get('concept:name')
-            resource = event.get('org:resource')
+            resource = event.get('org:resource') if event.get('org:resource') else event.get('org:group')
             if activity:
                 if resource is not None:
                     resource_mapping[activity].add(resource)
@@ -935,11 +1029,34 @@ def create_resource_mapping(log):
                     # Construct synthetic resource with "m_" prefix
                     synthetic_resource = f"m_{base}{suffix}" if suffix else f"m_{base}"
                     resource_mapping[activity].add(synthetic_resource)
-
+                
     return dict(resource_mapping)
 
 
-# Filterting the net by the value of the "Agent" attribute to get a sub-net.
+def send_receive_message(log):
+    """
+    Simulates the sending and receiving of messages between agents.
+    """
+    messages = {}
+    for trace in log:
+        for event in trace:
+            activity = event.get('concept:name')
+            sent = event.get('Message:Sent') if (event.get('Message:Sent') and event.get('Message:Sent') != "null") else None
+            rec = event.get('Message:Rec') if (event.get('Message:Rec') and event.get('Message:Rec') != "null") else None
+            if sent:
+                # Simulate sending a message
+                if sent not in messages:
+                    messages[sent] = {'sent_by': [], 'received_by': []}
+                messages[sent]['sent_by'].append(activity) 
+            if rec:
+                # Simulate receiving a message
+                if rec not in messages:
+                    messages[rec] = {'sent_by': [], 'received_by': []}
+                messages[rec]['received_by'].append(activity)
+    return messages
+
+
+# Filtering the net by the value of the "Agent" attribute to get a sub-net.
 def filter_net_by_resource(
         net: TypedJacksonNet,
         resource: str,
@@ -1084,7 +1201,7 @@ def get_all_resources(log):
     resources = set()
     for trace in log:
         for event in trace:
-            res = event.get("org:resource")
+            res = event.get("org:resource") if event.get("org:resource") else event.get("org:group")
             if res is not None:
                 resources.add(res)
     return resources
@@ -1094,10 +1211,19 @@ def filter_log_by_resource(log, resource: str):
     """Safely filters a log by org:resource, checking if the attribute exists."""
     if not log or not log[0]:
         raise ValueError("Empty log or trace!")
+    
+    # Determine which resource key is present
+    first_event = log[0][0]
+    if "org:resource" in first_event:
+        resource_key = "org:resource"
+    elif "org:group" in first_event:
+        resource_key = "org:group"
+    else:
+        raise ValueError("'org:resource' or 'org:group' not found in the log!")
 
-    # Check if "org:resource" exists in the first event
-    if xes.DEFAULT_RESOURCE_KEY not in log[0][0]:
-        raise ValueError(f"'{xes.DEFAULT_RESOURCE_KEY}' not found in the log!")
+    # # Check if "org:resource" exists in the first event
+    # if xes.DEFAULT_RESOURCE_KEY not in log[0][0]:
+    #     raise ValueError(f"'{xes.DEFAULT_RESOURCE_KEY}' not found in the log!")
 
     # Proceed with filtering
     filtered_log = pm4py.filter_event_attribute_values(
@@ -1125,7 +1251,7 @@ def remove_arc_from_to(net, a, b):
             break  # stop after removing one
 
 
-def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
+def remove_tau_splits_and_joins_tjn(tjn: TypedJacksonNet):
     """
     Removes silent transitions that have either:
     - 1 input place and multiple output places (split), or
@@ -1137,20 +1263,10 @@ def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
     :param net:
     :return:
     """
-    tjn = copy.deepcopy(typed_JN)
+    # tjn = copy.deepcopy(typed_JN)
     initial_place = tjn.get_first_place()
     final_place = tjn.get_last_place()
     to_remove = []
-
-    for t_name, t in tjn.transitions.items():
-        if t_name == "e12_pre_tau_start":
-            for pre in t.pre:
-                predecessors = [a.source for a in pre.in_arcs]
-                print(f"Debug: Predecessors of {t_name} is")
-                for pre in predecessors:
-                    print(f"- {pre.name}")
-                
-
 
     for t_name, t in tjn.transitions.items():
         if t_name is None or "tau" in t_name.lower() or "_tau_" in t_name.lower():
@@ -1163,7 +1279,6 @@ def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
                     predecessors = [a.source for a in input_place.in_arcs]
 
                     if len(predecessors) == 1:
-                        print(f"Predecessor of silent transition {t_name} is: {predecessors[0].name}")
                         # Whether input place has direct transition successors
                         # If not, remove all the incoming and outgoing arcs, and delete the input place afterward
                         
@@ -1173,9 +1288,6 @@ def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
 
                         if len(succ_transitions) > 0:  # True if there is at least one other successor transition
                             remove_post = False
-                            print(f"Successor transitions of silent transition {t_name}:")
-                            for suc in succ_transitions:
-                                print(f" - {suc.name}   ")
                             tjn.remove_arc_from_to(input_place, t)
                         else:
                             # Succ_transition only contains silent transition
@@ -1207,15 +1319,7 @@ def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
 
                 if output_place is not final_place:
                     successors = [a.target for a in output_place.out_arcs if isinstance(a.target, Transition)]
-                    if t_name == "t12_tau_end":
-                        print(f"Debug: Successors of {t_name} is (should be t12_tau_start_tau_end)")
-                        for suc in successors:
-                            print(f"- {suc.name}")
-                            print(f"Predecessors of {suc.name} is (should contain t10)")
-                            for pre_place in suc.pre:
-                                for a in pre_place.in_arcs:
-                                    print(f" - {a.source.name}")
-
+                    
                     if len(successors) == 1:
                         pred_transitions = [a.source for a in output_place.in_arcs
                                             if isinstance(a.source, Transition) and a.source.name != t_name]
@@ -1223,10 +1327,6 @@ def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
 
                         if len(pred_transitions) > 0:  # True if there is at least one other predecessor transition
                             discard_output = False
-                            print(f"Output place of silent transition {t_name} has successor: {successors[0].name}")
-                            print(f"Output place of silent transition {t_name} has predecessors:")
-                            for pred in pred_transitions:
-                                print(f" - {pred.name}")
                             tjn.remove_arc_from_to(t, output_place)
                         else:
                             for arc in list(output_place.in_arcs) + list(output_place. out_arcs):
@@ -1242,12 +1342,6 @@ def remove_tau_splits_and_joins_tjn(typed_JN: TypedJacksonNet):
                             vars.update(var)
                         for p in list(t.pre):
                             tjn.add_arc_from_to(p, successors[0], vars)
-                            print(f"Pre place of {successors[0].name} before adding arcs:")
-                            for pre in successors[0].pre:
-                                print(f" - {pre.name}")
-
-                            print(f"Connecting {p.name} to {successors[0].name}")
-                            print(f"Pre place of {successors[0].name}:")
                             for pre in successors[0].pre:
                                 print(f" - {pre.name}")
                             if discard_output:
@@ -1348,19 +1442,31 @@ def convert_to_tjn_by_resource(log_path):
     log_name = log_path.removesuffix(".xes")
     log = xes_importer.apply(os.path.join(PROJECT_DIR, "logs", log_path))
     tjn_full = None
+    pn_full = {}
     tjns = {}
     pns = {}
     all_resources = get_all_resources(log)
+    print(f"All resources in the log: {all_resources}")
     logs_by_resource = {}
-
     tree_full = inductive_miner.apply(log)
     resource_mapping = create_resource_mapping(log)
     tjn_full = build_tjn(tree_full, activity_specs=resource_mapping)
-    tjn_full.populate_transition_places()
+    tjn_full.populate_transition_places()         
     tjn_full = remove_tau_splits_and_joins_tjn(tjn_full)
     tjn_full.populate_transition_places()
+    messages = send_receive_message(log)
+    tjn_full.annotate_arcs_with_messages(messages)
+
+    # Remove transitions with no in_arcs and out_arcs
+    to_remove = [t_name for t_name, t in tjn_full.transitions.items() if not t.in_arcs and not t.out_arcs]
+    for t_name in to_remove:
+        tjn_full.transitions.pop(t_name)
 
     pn, initial_marking, final_marking = convert_tjn_to_petri_ignore_types(tjn_full)
+    pn_full["pn"] = pn
+    pn_full["initial_marking"] = initial_marking
+    pn_full["final_marking"] = final_marking
+
     # Visualize the full Petri net
     filename = os.path.join(PROJECT_DIR, "logs", "pngs", f"full_{log_name}.png")
     if not os.path.exists(filename):
@@ -1369,10 +1475,15 @@ def convert_to_tjn_by_resource(log_path):
 
     if len(all_resources) > 1:
         for res in all_resources:
-            logs_by_resource[res] = filter_log_by_resource(log, res)
-            # Save the sublog
-            sublog_path = os.path.join(PROJECT_DIR, "logs", "sublog", f"sub_log_{log_name}_{res}.xes")
-            # sublog_path = f"sublog_{log_name}_{res}.xes"
+            if "collective" in log_name:
+                # For collective logs, use the existing sublog
+                sublog_path = os.path.join(PROJECT_DIR, "logs", "sublog", f"sub_log_{res}_{log_name}.xes")
+                logs_by_resource[res] = xes_importer.apply(sublog_path)
+            else:
+                logs_by_resource[res] = filter_log_by_resource(log, res)
+                # Save the sublog
+                sublog_path = os.path.join(PROJECT_DIR, "logs", "sublog", f"sub_log_{res}_{log_name}.xes")
+            
             if not os.path.exists(sublog_path):
                 xes_exporter.apply(logs_by_resource[res], sublog_path)
     else:
@@ -1384,25 +1495,24 @@ def convert_to_tjn_by_resource(log_path):
         tree = inductive_miner.apply(sub_log)
         tjn = build_tjn(tree, activity_specs=resource_mapping)
         tjn.populate_transition_places()
+        for place in tjn.places.values():
+            place.add_types(resource)
         tjns[resource] = remove_tau_splits_and_joins_tjn(tjn)
-    
-    
+
 
     # Convert tjn to petri nets and remove unnecessary silent transitions
     for resource, tjn in tjns.items():
         converted_filterd_pn, initial_marking, final_marking = convert_tjn_to_petri_ignore_types(tjn)
         pns[resource] = (converted_filterd_pn, initial_marking, final_marking)
         print(f"Initial marking: {initial_marking}, Final marking: {final_marking}")
-        # remove_tau_splits_and_joins_pn(converted_filterd_pn, initial_marking, final_marking)
         # Visualize the Petri net
         filename = os.path.join(PROJECT_DIR, "logs", "pngs", f"{resource}_{log_name}.png")
-        # filename =  f"{resource}_{log_name}.png"
 
         if not os.path.exists(filename):
             gviz = pn_visualizer.apply(converted_filterd_pn, initial_marking, final_marking)
             pn_visualizer.save(gviz, filename)
 
-    return tjn_full, all_resources, logs_by_resource, tjns, pns
+    return tjn_full, pn_full, all_resources, logs_by_resource, tjns, pns
 
 
 def check_property(petri_nets):
@@ -1431,42 +1541,51 @@ def check_property(petri_nets):
                 print(f"Unreachable final markings: {diagnostics['unreachable_markings']}")
 
 
-def precision_and_fitness(petri_nets, logs, log_name):
-    # Export Petri net to PNML file
-    for resource, (pn, initial_marking, final_marking) in petri_nets.items():
-        print(f"{log_name} filtered by {resource}: ")
-        path_pnml = os.path.join(PROJECT_DIR, "logs", "pnmls", f"{resource}_{log_name}.pnml")
-        # path_pnml = f"{resource}_{log_name}.pnml"
-        if not os.path.exists(path_pnml):
-            pnml_exporter.apply(pn, initial_marking, path_pnml, final_marking=final_marking)
+def precision_and_fitness(resource, petri_nets, logs, log_path):
+    results = {}
+    log_name = log_path
+    if ".xes" in log_path:
+        log_name = log_path.replace(".xes", "")
 
-        # Convert back to petri net, pm4py ensures the Petri net is in a “sound” format suitable for alignments.
-        pn = pm4py.read_pnml(path_pnml)
+    if resource == "No resource":
+        pn, initial_marking, final_marking = petri_nets["pn"], petri_nets["initial_marking"], petri_nets["final_marking"]
+        log = xes_importer.apply(os.path.join(PROJECT_DIR, "logs", log_path))
+    else:
+        pn, initial_marking, final_marking = petri_nets[resource]
+        log = logs[resource]
+    
+    path_pnml = os.path.join(PROJECT_DIR, "logs", "pnmls", f"{resource}_{log_name}.pnml")
+    if not os.path.exists(path_pnml):
+        pnml_exporter.apply(pn, initial_marking, path_pnml, final_marking=final_marking)
+    # Convert back to petri net, pm4py ensures the Petri net is in a “sound” format suitable for alignments.
+    pn = pm4py.read_pnml(path_pnml)
+    # Alignment based fitness and precision
+    alignment_fitness, alignment_precision = 0.0, 0.0
+    try:
+        alignment_fitness = pm4py.fitness_alignments(log, *pn)['averageFitness']
+        alignment_precision = pm4py.precision_alignments(log, *pn)
+    except Exception as e:
+        print(f"Error computing alignment metrics for {resource}: {e}")
+    print(f"Alignment-based Fitness for resource {resource}: {alignment_fitness}, and precision {alignment_precision}")
 
-        # Alignment based fitness and precision
-        fitness = pm4py.fitness_alignments(logs[resource], *pn)
-        precision = pm4py.precision_alignments(logs[resource], *pn)
-        print(f"Alignment-based Fitness: {fitness}")
-        print(f"Alignment-based Precision: {precision}")
+    # Entropy based fitness and precision
+    jar_path = "lib/jbpt/jbpt-pm/entropia/jbpt-pm-entropia-1.7.jar"
 
+    if resource == "No resource":
+        sublog_path = os.path.join(PROJECT_DIR, "logs", f"{log_name}.xes")
+    else:
+        sublog_path = os.path.join(PROJECT_DIR, "logs", "sublog", f"sub_log_{resource}_{log_name}.xes")
 
-        jar_path = "codebase/jbpt-pm/entropia/jbpt-pm-entropia-1.7.jar"
-        sublog_path = os.path.join(PROJECT_DIR, f"sublog_{log_name}_{resource}.xes")
-        # sublog_path = f"sublog_{log_name}_{resource}.xes"
-        if os.path.exists(sublog_path):
-            rel_path = sublog_path
-        else:
-            rel_path = os.path.join(PROJECT_DIR, f"{log_name}.xes")
-            # rel_path = f"{log_name}.xes"
-
-        # Entropy based fitness and precision
-        command = [
-            "java", "-jar", jar_path,
-            "-rel", rel_path,
-            "-ret", path_pnml,
-            "-empr"  # Compute precision
-        ]
-
+    entropy_fitness, entropy_precision = 0.0, 0.0
+    print(f"Does sublog path and pnml path exists? -> {os.path.exists(sublog_path)}, {os.path.exists(path_pnml)}")
+    print(f"Log path and pmnl for entropy fitness and precision: {sublog_path}, {path_pnml}")
+    command = [
+        "java", "-jar", jar_path,
+        "-rel", sublog_path,
+        "-ret", path_pnml,
+        "-empr"  # Compute precision
+    ]
+    try:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0:
             print("Error running Entropia:\n", result.stderr)
@@ -1481,9 +1600,22 @@ def precision_and_fitness(petri_nets, logs, log_name):
                 elif line.strip().startswith("Recall:"):
                     recall = float(line.split(":")[1].strip().rstrip('.'))
 
-            print(f"Entropy-based fitness: {precision}")
-            print(f"Entropy-based recall: {recall}")
-
+            entropy_fitness = recall if recall is not None else 0.0
+            entropy_precision = precision if precision is not None else 0.0
+            print(f"Entropy-based fitness: {entropy_fitness}")
+            print(f"Entropy-based recall: {entropy_precision}")
+    except Exception as e:
+        print(f"Error computing entropy metrics for {resource}: {e}")
+        
+    # Store metrics per resource
+    results[resource] = {
+        "alignment_fitness": alignment_fitness,
+        "alignment_precision": alignment_precision,
+        "entropy_fitness": entropy_fitness,
+        "entropy_precision": entropy_precision
+    }
+    
+    return results
 
 if __name__ == '__main__':
 

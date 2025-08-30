@@ -105,11 +105,39 @@
   <div id="controls">
     <label for="logSelect">Choose a log:</label>
     <select id="logSelect">
-      <option value="logs/IP-1_initial_log.xes">log1.xes</option>
-      <option value="logs/IP2_initial_log.xes">log2.xes</option>
-      <option value="logs/IP-3_init_log.xes">log3.xes</option>
+      <option value="logs/IP-1_initial_log.xes">Multiagent_log1.xes</option>
+      <option value="logs/IP2_initial_log.xes">Multiagent_log2.xes</option>
+      <option value="logs/IP-3_init_log.xes">Multiagent_log3.xes</option>
+      <option value="logs/IP-4_init_log.xes">Multiagent_log4.xes</option>
+      <option value="logs/IP-5_init_log.xes">Multiagent_log5.xes</option>
+      <option value="logs/IP-6_init_log.xes">Multiagent_log6.xes</option>
+      <option value="logs/IP-7_init_log.xes">Multiagent_log7</option>
+      <option value="logs/IP-8_init_log.xes">Multiagent_log8</option>
+      <option value="logs/IP-9_init_log.xes">Multiagent_log9</option>
+      <option value="logs/IP-10_init_log.xes">Multiagent_log10</option>
+      <option value="logs/IP-11_init_log.xes">Multiagent_log11</option>
+      <option value="logs/IP-12_init_log.xes">Multiagent_log12</option>
+      <option value="logs/collectivelog_1.xes">Collective_log1</option>
+      <option value="logs/collectivelog_2.xes">Collective_log2</option>
+      <option value="logs/collectivelog_3.xes">Collective_log3</option>
+      <option value="logs/collectivelog_4.xes">Collective_log4</option>
+      <option value="logs/collectivelog_5.xes">Collective_log5</option>
+      <option value="logs/collectivelog_6.xes">Collective_health_care</option>
+      <option value="logs/collectivelog_7.xes">Collective_log7</option>
+      <option value="logs/collectivelog_8.xes">Collective_log8</option>
+      <option value="logs/collectivelog_9.xes">Collective_log9</option>
+      <option value="logs/collectivelog_10.xes">Collective_log10</option>
+      <option value="logs/collectivelog_11.xes">Collective_log11</option>
+      <option value="logs/EM_Log.xes">EM_Log</option>
+      <option value="logs/FP_Log.xes">FP_Log</option>
+      <option value="logs/ID_Log.xes">ID_Log</option>
+      <option value="logs/SD_Log.xes">SD_Log</option>
+
     </select>
-    <button onclick="loadGraph()" style="padding: 5px 15px;">Load Graph</button>
+    <button onclick="handleLoadGraphClick()" style="padding: 5px 15px;">Load Graph</button>
+    <button onclick="handleMetricsClick()" style="padding: 5px 15px;">Fitness and Precision</button>
+    <button onclick="downloadSVG()" style="padding: 5px 15px;">Save SVG</button>
+    <button onclick="downloadPNML()" style="padding: 5px 15px;">Save PNML</button>
     <span class="controls-info">Drag to pan, Scroll to zoom</span>
   </div>
   
@@ -142,44 +170,66 @@ document.getElementById('logSelect').addEventListener('change', function() {
   console.log("Selected:", selectedText);
 });
 
+
 let currentlyLoadedLog = null;
-let currentlyLoadedResource = null;
+let currentlyLoadedResource = "All";
 
-function loadGraph(resource = "All") {
-  const select = document.getElementById('logSelect');
-  const selectedOption = select.options[select.selectedIndex];
-  
-  const fullPath = select.value;
-  const filename = fullPath.split("/").pop();
 
-  console.log("Loading Petri Net:", filename, "resource:", resource);
+// Populate resource dropdown from backend
+function updateResourceDropdown(resources) {
+  const resourceSelect = document.getElementById("resourceSelect");
+  resourceSelect.innerHTML = "";
 
-  if (currentlyLoadedLog == filename && currentlyLoadedResource == resource) {
-    console.log("Same log already loaded, skipping...");
-    return;
-  }
-  currentlyLoadedLog = filename;
-  currentlyLoadedResource = resource;
+  const allOption = document.createElement("option");
+  allOption.value = "All";
+  allOption.textContent = "All Resources";
+  resourceSelect.appendChild(allOption);
+
+  resources.forEach(r => {
+    const opt = document.createElement("option");
+    opt.value = r;
+    opt.text = r;
+    resourceSelect.appendChild(opt);
+  });
+
+  resourceSelect.value = currentlyLoadedResource || "All";
+  console.log("Resource options updated:", resources);
+
+  resourceSelect.onchange = () => {
+    currentlyLoadedResource = resourceSelect.value;
+    // loadGraph(currentlyLoadedLog, currentlyLoadedResource);
+  };
+}
+
+// Fetch resources for a log
+function fetchResourcesForLog(filename) {
+  return fetch("/get_resources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename })
+  })
+  .then(res => res.json())
+  .then(data => Array.from(data.resources).sort());
+}
+
+// Load graph for log + resource
+function loadGraph(filename = currentlyLoadedLog, resource = currentlyLoadedResource) {
+  if (!filename) return;
+
+  console.log("Loading Typed Jackson Net:", filename, "resource:", resource);
 
   fetch("/load_log", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename, resource })
   })
-  .then(response => {
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return response.json(); 
-  })
+  .then(res => res.json())
   .then(data => {
-    console.log("Loaded TJN JSON:", data);  
-    originalGraphData = data;
+    currentlyLoadedLog = filename;
+    currentlyLoadedResource = resource;
     updateGraphInfo(data);
-    populateResourceDropdown(data);
     renderGraph(data);
-  })
-  .catch(err => console.error("Error loading graph:", err));
+  });
 }
 
 function updateGraphInfo(graphData) {
@@ -192,27 +242,28 @@ function updateGraphInfo(graphData) {
   document.getElementById('resource-count').textContent = graphData.resources.length;
 }
 
-function populateResourceDropdown(graphData) {
-  const resourceSelect = document.getElementById('resourceSelect');
-  resourceSelect.style.display = "inline";
-  resourceSelect.innerHTML = "";
+//
+function updateMetrics(metrics) {
+  const sidebar = document.getElementById("graph-info");
+  let metricsDiv = document.getElementById("metrics-info");
 
-  const allOption = document.createElement('option');
-  allOption.value = "All";
-  allOption.textContent = "All Resources";
-  resourceSelect.appendChild(allOption);
-   
-  graphData.resources.forEach(r => {
-    const opt = document.createElement('option');
-    opt.value = r;
-    opt.text = r;
-    resourceSelect.appendChild(opt);
-  });
+  if (!metricsDiv) {
+    metricsDiv = document.createElement("div");
+    metricsDiv.id = "metrics-info";
+    metricsDiv.style.marginTop = "10px";
+    metricsDiv.style.fontSize = "12px";
+    metricsDiv.style.color = "#444";
+    sidebar.appendChild(metricsDiv);
+  }
 
-  resourceSelect.onchange = () => {
-    loadGraph(resourceSelect.value);
-  };
+  metricsDiv.innerHTML = `
+    <p><b>Alignment-based fitness:</b> ${metrics.alignment_fitness ?? "–"}</p>
+    <p><b>Alignment-based precision:</b> ${metrics.alignment_precision ?? "–"}</p>
+    <p><b>Entropy-based fitness:</b> ${metrics.entropy_fitness ?? "–"}</p>
+    <p><b>Entropy-based precision:</b> ${metrics.entropy_precision ?? "–"}</p>
+  `;
 }
+
 
 function showNodeInfo(data, isEdge = false) {
   const nodeInfoBox = document.getElementById("node-info");
@@ -231,18 +282,15 @@ function showNodeInfo(data, isEdge = false) {
       <p><b>From:</b> ${data.source}</p>
       <p><b>To:</b> ${data.target}</p>
       <p><b>Variables:</b> ${Array.isArray(data.variables) ? data.variables.join(", ") : (data.variables || "–")}</p>
-      <p><b>Label:</b> ${data.label || "–"}</p>
     `;
   } else if (data.type === "place") {
     detailsBox.innerHTML = `
       <p><b>Place:</b> ${data.label || data.id}</p>
-      <p><b>Types:</b> ${Array.isArray(data.place_types) ? data.place_types.join(", ") : (data.place_types || "–")}</p>
-      <p><b>Tokens:</b> ${data.tokens || 0}</p>
+      <p><b>Types:</b> ${Array.isArray(data.types) ? data.types.join(", ") : (data.types || "–")}</p>
     `;
   } else if (data.type === "transition") {
     detailsBox.innerHTML = `
       <p><b>Transition:</b> ${data.label || data.id}</p>
-      <p><b>Inscription:</b> ${data.inscription ? JSON.stringify(data.inscription) : "–"}</p>
       <p><b>Emit:</b> ${data.emit || "–"}</p>
       <p><b>Collect:</b> ${data.collect || "–"}</p>
     `;
@@ -286,7 +334,14 @@ function renderGraph(graphData) {
       }
     } else if (node.type === "transition") {
       nodeData.shape = "rect";
-      nodeData.style += "fill: #afc7f6;";
+
+      if ((node.label || "").toLowerCase().includes("tau")) {
+        nodeData.style += "fill: black;";
+        nodeData.label = "";
+        nodeData.labelStyle = "fill: white;";
+      } else {
+        nodeData.style += "fill: #afc7f6;";
+      }
     }
 
     g.setNode(node.id, nodeData);
@@ -381,10 +436,86 @@ function renderGraph(graphData) {
   );
 }
 
-// Initialize on load
-document.addEventListener('DOMContentLoaded', () => {
-  console.log("Page loaded. Select a log and click 'Load Graph' to render.");
+// Download current graph as SVG
+function downloadSVG() {
+  const svgEl = document.querySelector("#graph svg");
+  if (!svgEl) {
+    alert("No graph to export!");
+    return;
+  }
+
+  const serializer = new XMLSerializer();
+  let svgString = serializer.serializeToString(svgEl);
+
+  // Add XML header for compatibility
+  if (!svgString.startsWith('<?xml')) {
+    svgString = '<?xml version="1.0" standalone="no"?>\n' + svgString;
+  }
+
+  const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${currentlyLoadedResource}_${currentlyLoadedLog}.svg`;
+  a.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function downloadPNML() {
+  const logName = currentlyLoadedLog;          // e.g., "log1.xes"
+  const resource = currentlyLoadedResource;    // e.g., "Agent1"
+  
+  const url = `/download_pnml/${resource}/${logName}`;
+  window.open(url, "_blank");  // triggers download
+}
+
+
+// On log change
+document.getElementById("logSelect").addEventListener("change", async function() {
+  const filename = this.value.split("/").pop();
+  currentlyLoadedLog = filename;
+
+  // Fetch resources and update dropdown
+  const resources = await fetchResourcesForLog(filename);
+  updateResourceDropdown(resources);
+
+  // Load graph with default resource
+  currentlyLoadedResource = "All";
 });
+
+// Initialize on page load
+document.addEventListener("DOMContentLoaded", async () => {
+  const logSelect = document.getElementById("logSelect");
+  const firstLog = logSelect.value.split("/").pop();
+  currentlyLoadedLog = firstLog;
+
+  const resources = await fetchResourcesForLog(firstLog);
+  updateResourceDropdown(resources);
+
+  currentlyLoadedResource = "All";
+});
+
+// Load Graph button
+function handleLoadGraphClick() {
+  loadGraph(currentlyLoadedLog, currentlyLoadedResource);
+}
+
+// Fitness and Precision button
+function handleMetricsClick() {
+  if (!currentlyLoadedLog) return;
+
+  fetch("/calculate_metrics", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: currentlyLoadedLog, resource: currentlyLoadedResource })
+  })
+  .then(res => res.json())
+  .then(metrics => {
+    updateMetrics(metrics); // reuse your existing sidebar update function
+  });
+}
 </script>
 </body>
 </html>
