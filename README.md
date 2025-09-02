@@ -41,6 +41,8 @@ Instead, they are available for download from GitHub Releases.
 
 After downloading, place the logs into the following structure:
 
+```csharp
+
 logs/
   ├── EM_Log.xes
   ├── SD_Log.xes
@@ -53,7 +55,7 @@ logs/
       ├── sub_log_PartyA_collectivelog_1.xes
       └── sub_log_PartyA_collectivelog_2.xes
       └── ... (other .xes log files)
-
+```
 ---
 
 ## ▶️ Usage
@@ -78,4 +80,5 @@ python app.py
 │   └── jbpt/             # JBPT submodule
 └── README.md
 ```
+
 
