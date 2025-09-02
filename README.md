@@ -23,13 +23,36 @@ It loads event logs (`.xes`), constructs Petri nets, and provides interactive vi
 
 ---
 
-## 🔧 Installation
+## 🔧 Installation and downloading Event Logs
 
 Clone the repository **with submodules** to include JBPT:
 
 ```bash
 git clone --recurse-submodules https://github.com/jyt0708/TypedJacksonNet_ProcessMining.git 
 cd <your-repo>
+```
+
+The `.xes` logs are **not included in the repository** (due to GitHub’s file size limits).  
+Instead, they are available for download from GitHub Releases.
+
+👉 [Download Logs from Releases](https://github.com/jyt0708/TypedJacksonNet_ProcessMining/releases/latest)
+
+### Folder Structure
+
+After downloading, place the logs into the following structure:
+
+logs/
+  ├── EM_Log.xes
+  ├── SD_Log.xes
+  ├── FP_Log.xes
+  ├── ID_Log.xes
+  ├── ... (other .xes log files)
+  ├── pngs/           # empty
+  ├── pnmls/          # empty
+  └── sublog/
+      ├── sub_log_PartyA_collectivelog_1.xes
+      └── sub_log_PartyA_collectivelog_2.xes
+      └── ... (other .xes log files)
 
 ---
 
@@ -38,6 +61,7 @@ cd <your-repo>
 
 ```bash
 python app.py
+```
 
 
 ## 📂Repository Structure
@@ -53,4 +77,5 @@ python app.py
 ├── lib/
 │   └── jbpt/             # JBPT submodule
 └── README.md
+```
 
