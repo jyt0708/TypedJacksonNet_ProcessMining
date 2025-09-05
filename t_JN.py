@@ -22,24 +22,6 @@ from pm4py.objects.petri_net.exporter import exporter as pnml_exporter
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
-# Process Tree for the 1.Log: {'Agent 1': ->(
-#     't1', +( 't3', 't2' ), 't4', X( ->( 't5', 'a!_1', 't9', 't10' ), ->(
-#     't6', 'a!_2', 't11', +( 't13', 't12' ), 't14'
-# ) ) ),
-# 'Agent 2': ->(
-#     +( 'e2', 'e1' ), +( 'e4', 'e3' ), 'e5', X(
-#     ->( 'e7', 'a?_2', X( ->( 'e9', 'e13' ), ->( 'e10', 'e14' ) ) ), ->( 'e6', 'a?_1', 'e8', +( 'e12', 'e11' ), 'e15' )
-# ))}
-
-# ->(
-#   +( 'e2', 't1', 'e1' ), +( 't3', 't2', 'e4', 'e3' ), +( 't4', 'e5' ), +( X( 'e7', 'e6' ), X( 't6', 't5' ) ),
-#   X( 'a!_2', 'a!_1' ), +( X( 't11', 't9' ), X( 'a?_2', 'a?_1' ) ), +( X( 'e9', 'e10', 'e8' ), X( 't10', +( 't13', 't12' ) ) ),
-#   +(
-#       X( tau, 't14' ), X( 'e13', 'e14', +( 'e12', 'e11' ) )
-#   ),
-#   X( tau, 'e15' ) )
-
 class Operator(Enum):
     # sequence operator
     SEQUENCE = ';'
@@ -866,12 +848,6 @@ class TypedJacksonNet:
                 else:
                     raise ValueError(f"t-JN is not complete, failing start/end place.")
 
-        # print("All arcs after loop append: ")
-        # for arc in self.arcs:
-        #     print(f"Arc: {arc.source.name} -> {arc.target.name}")
-        #     print(f"Variable: {arc.variable}")
-
-
 def create_tau(name: str) -> TypedJacksonNet:
     """
     Constructs a Typed Jackson Net (t-JN) containing a τ-transition
@@ -1220,11 +1196,7 @@ def filter_log_by_resource(log, resource: str):
         resource_key = "org:group"
     else:
         raise ValueError("'org:resource' or 'org:group' not found in the log!")
-
-    # # Check if "org:resource" exists in the first event
-    # if xes.DEFAULT_RESOURCE_KEY not in log[0][0]:
-    #     raise ValueError(f"'{xes.DEFAULT_RESOURCE_KEY}' not found in the log!")
-
+        
     # Proceed with filtering
     filtered_log = pm4py.filter_event_attribute_values(
         log,
@@ -1617,65 +1589,6 @@ def precision_and_fitness(resource, petri_nets, logs, log_path):
     
     return results
 
-if __name__ == '__main__':
 
-
-    def create_sample_net():
-        """Create a sample TypedJacksonNet for demonstration."""
-        net = TypedJacksonNet()
-
-        # Create places
-        p1 = Place("P1", {"TypeA"})
-        p1.start_place = True
-        p2 = Place("P2", {"TypeB"})
-        p3 = Place("P3", {"TypeA", "TypeB"})
-        p3.end_place = True
-
-        net.places = {p.name: p for p in [p1, p2, p3]}
-
-        # Create transitions
-        t1 = Transition("T1", {"input": {"x": "TypeA"}, "output": {"y": "TypeB"}})
-        t2 = Transition("T2", {"input": {"y": "TypeB"}, "output": {"z": "TypeA"}})
-
-        net.transitions = {t.name: t for t in [t1, t2]}
-
-        # Create arcs
-        a1 = Arc({"x"}, p1, t1)
-        a2 = Arc({"y"}, t1, p2)
-        a3 = Arc({"y"}, p2, t2)
-        a4 = Arc({"z"}, t2, p3)
-
-        net.arcs = {a1, a2, a3, a4}
-
-        # Update node connections
-        p1.out_arcs.add(a1)
-        t1.in_arcs.add(a1)
-        t1.out_arcs.add(a2)
-        p2.in_arcs.add(a2)
-        p2.out_arcs.add(a3)
-        t2.in_arcs.add(a3)
-        t2.out_arcs.add(a4)
-        p3.in_arcs.add(a4)
-
-        return net
-
-
-
-    # log_name = "IP-3_init_log"
-    # logs, tjns, pns = convert_to_tjn_by_resource(log_name)
-    # check_property(pns)
-    # precision_and_fitness(pns, logs, log_name)
-
-    # log_path = f"{log_name}.xes"
-    # log = xes_importer.apply(log_path)
-    # all_resources = get_all_resources(log)
-    # logs_by_resource = {}
-    # for res in all_resources:
-    #     logs_by_resource[res] = filter_log_by_resource(log, res)
-    # pn = pm4py.read_pnml(f"Agent 1_IP-1_initial_log.pnml")
-    # fitness = pm4py.fitness_alignments(logs_by_resource["Agent 1"], *pn)
-    # precision = pm4py.precision_alignments(logs_by_resource["Agent 1"], *pn)
-    # print(f"Alignment-based Fitness: {fitness}")
-    # print(f"Alignment-based Precision: {precision}")
 
 
